@@ -1,0 +1,12 @@
+# requirements.txt
+
+# Data handling
+pandas
+yfinance
+
+# Plotting
+matplotlib
+
+# Code formatting & linting
+black
+flake8
