@@ -4,11 +4,12 @@
 pandas
 yfinance
 matplotlib
+openpyxl
 
 # Code Format & Lint
 black
 flake8
 
-# (Optional) static type checking and pre-commit
+# Static type checking and pre-commit
 mypy
 pre-commit
