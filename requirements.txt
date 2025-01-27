@@ -1,12 +1,14 @@
 # requirements.txt
 
-# Data handling
+# Data & Plotting
 pandas
 yfinance
-
-# Plotting
 matplotlib
 
-# Code formatting & linting
+# Code Format & Lint
 black
 flake8
+
+# (Optional) static type checking and pre-commit
+mypy
+pre-commit
