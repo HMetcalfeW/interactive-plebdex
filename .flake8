@@ -1,0 +1,11 @@
+[flake8]
+exclude =
+    venv/,
+    .venv/,
+    env/
+
+# Ignore specific error codes if needed (e.g., E501 for line length):
+# ignore = E501
+
+# Matches Black's default line length
+max-line-length = 88

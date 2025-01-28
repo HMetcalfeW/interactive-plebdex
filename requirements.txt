@@ -1,0 +1,15 @@
+# requirements.txt
+
+# Data & Plotting
+pandas
+yfinance
+matplotlib
+openpyxl
+
+# Code Format & Lint
+black
+flake8
+
+# Static type checking and pre-commit
+mypy
+pre-commit
