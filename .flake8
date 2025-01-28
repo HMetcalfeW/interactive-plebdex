@@ -2,9 +2,10 @@
 exclude =
     venv/,
     .venv/,
-    env/,
+    env/
 
 # Ignore specific error codes if needed (e.g., E501 for line length):
 # ignore = E501
 
-max-line-length = 88  # Matches Black's default line length
+# Matches Black's default line length
+max-line-length = 88

@@ -8,7 +8,8 @@ import datetime
 import pandas as pd
 
 import yfinance as yf
-import matplotlib.pyplot as plt
+
+# import matplotlib.pyplot as plt
 
 
 import logging as log
@@ -17,7 +18,7 @@ logger = log.getLogger(__name__)
 DEFAULT_LOG_LEVEL = log.INFO
 DEFAULT_LOG_FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 
-STARTING_DOLLARS = 100
+INITIAL_INVESTMENT = 10000
 PLEBDEX_EXCEL_FILE = "./data/plebdex-weights.xlsx"
 
 
@@ -27,7 +28,7 @@ class Holding:
     This represents an investable security holding
     """
 
-    symbol: str
+    ticker: str
     initial_weight: float
     number_of_shares: float
 
@@ -58,22 +59,34 @@ def initialize_logger():
     log.basicConfig(format=DEFAULT_LOG_FORMAT, level=DEFAULT_LOG_LEVEL)
 
 
-def read_plebdex_holdings(file_path=PLEBDEX_EXCEL_FILE):
+def read_plebdex_and_generate_holdings(file_path=PLEBDEX_EXCEL_FILE):
     logger.info(file_path)
 
-    excel_sheet = pd.read_excel(file_path)
-    logger.info(excel_sheet)
+    excel_file = pd.ExcelFile(file_path)
+    logger.info(excel_file)
 
+    holdings_by_year = {}
 
-# def fetch_stock_data(ticker, start_date, end_date):
-#     """
-#     Fetches historical data for a given ticker from Yahoo Finance.
-#     Returns a DataFrame with the 'Adj Close' price.
-#     """
-#     data = yf.download(ticker, start=start_date, end=end_date, multi_level_index=False)
-#     print("Downloaded columns:", data.columns)  # Debug print
-#     # Keep only the adjusted close column
-#     return data[['Close']].rename(columns={'Close': ticker})
+    for sheet_name in excel_file.sheet_names:
+        # Convert the sheet name to an integer year (if it's a string like "2020")
+        year_val = int(sheet_name)
+
+        # Parse the sheet
+        df = excel_file.parse(sheet_name)
+
+        holdings = []
+
+        # Assume df has columns: "Ticker" (str), "Weight" (float)
+        for row in df.itertuples(index=False):
+            # Access attributes exactly matching column names: row.Ticker, row.Weight
+            holding = Holding(
+                ticker=row.Ticker, initial_weight=row.Weight, number_of_shares=0
+            )
+            holdings.append(holding)
+
+        holdings_by_year[year_val] = holdings
+
+    return holdings_by_year
 
 
 def normalize(df):
@@ -111,7 +124,7 @@ def main():
     # read the plebdex holdings from excel, returning a data structure
     # containing all holdings by year
 
-    # calculate the number of shares for each holding given the STARTING_DOLLARS for the first year
+    # calculate the number of shares for each holding
 
     # calculate the daily close of the plebdex to build data points
 
@@ -124,7 +137,11 @@ def main():
     # plot the data points
 
     fetch_stock_data("SPY", 2023)
-    read_plebdex_holdings()
+
+    # fetch our holdings from the plebdex
+    holdings = read_plebdex_and_generate_holdings()
+    logger.info(holdings)
+
     # loadPlebdex()
     # Input parameters
     # my_ticker = "AAPL"
