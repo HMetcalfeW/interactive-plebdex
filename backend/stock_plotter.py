@@ -146,10 +146,13 @@ def calculate_annual_return(plebdex):
 
     investment_value = INITIAL_INVESTMENT_DOLLARS
 
+    # for each year process the return of the plebdex
     for year, holdings in plebdex.items():
         year_str = str(year)
 
         logger.info("Started " + year_str + " with $" + str(investment_value))
+
+        years_return_dollars = 0.0
 
         # for each holding fetch the stock data for that year
         for holding in holdings:
@@ -181,11 +184,14 @@ def calculate_annual_return(plebdex):
             logger.debug(end_of_year_price_dollars)
 
             # calculate the total asset return based on the number of shares held
-            investment_value = investment_value + (
+            years_return_dollars = years_return_dollars + (
                 (end_of_year_price_dollars - jan_1_price_dollars)
                 * holding.num_of_shares
             )
 
+            # calculate daily return
+
+        investment_value += years_return_dollars
         logger.info("Ended " + year_str + " with $" + str(investment_value))
 
 
