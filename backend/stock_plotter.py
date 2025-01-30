@@ -2,7 +2,7 @@ from typing import List
 from typing import Dict
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime
 
 import pandas as pd
@@ -54,8 +54,8 @@ class plebdex:
     """
 
     annual_return: float = 0.0
-    holdings: List[Holding] = []
-    daily_asset_values: Dict[datetime.date, AssetValue] = {}
+    holdings: List[Holding] = field(default_factory=list)
+    daily_asset_values: Dict[datetime.date, AssetValue] = field(default_factory=dict)
 
 
 def initialize_logger():
@@ -66,10 +66,14 @@ def initialize_logger():
 
 
 def read_plebdex_and_generate_holdings(file_path=PLEBDEX_EXCEL_FILE):
-    logger.info(file_path)
+    """
+    This function reads in the plebdex from excel
+    The excel file contains multiple sheets, each representing one year
+    """
+    logger.debug("Reading the plebdex holdings from " + file_path)
 
     excel_file = pd.ExcelFile(file_path)
-    logger.info(excel_file)
+    logger.debug("The contents of the plebdex excelsheet " + str(excel_file))
 
     holdings_by_year = {}
 
@@ -145,7 +149,7 @@ def calculate_annual_return(plebdex):
     for year, holdings in plebdex.items():
         year_str = str(year)
 
-        logger.info(year_str + " " + str(holdings))
+        logger.debug(year_str + " " + str(holdings))
         # for each holding fetch the stock data for that year
         for holding in holdings:
             stock_data = fetch_stock_data(year, holding.ticker)
@@ -157,7 +161,7 @@ def calculate_annual_return(plebdex):
 
             # get the Jan 1 price opening price to calculate our initial share count
             jan_1_price_dollars = stock_data.iloc[0]["Open"].values[0]
-            logger.info(
+            logger.debug(
                 "January " + year_str + " Opening Price " + str(jan_1_price_dollars)
             )
 
@@ -165,11 +169,11 @@ def calculate_annual_return(plebdex):
             holding.number_of_shares = (
                 investment_value * holding.initial_weight
             ) / jan_1_price_dollars
-            logger.info("Holding " + str(holding))
+            logger.debug("Holding " + str(holding))
 
             # get the last closing price
             end_of_year = stock_data.iloc[len(stock_data) - 1]
-            logger.info(end_of_year)
+            logger.debug(end_of_year)
 
 
 def main():
