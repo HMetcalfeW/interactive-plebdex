@@ -18,7 +18,7 @@ logger = log.getLogger(__name__)
 DEFAULT_LOG_LEVEL = log.INFO
 DEFAULT_LOG_FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 
-INITIAL_INVESTMENT = 10000
+INITIAL_INVESTMENT_DOLLARS = 10000
 PLEBDEX_EXCEL_FILE = "./data/plebdex-weights.xlsx"
 
 
@@ -28,13 +28,18 @@ class Holding:
     This represents an investable security holding
     """
 
-    ticker: str
-    initial_weight: float
-    number_of_shares: float
+    ticker: str = ""
+    initial_weight: float = 0.0
+    number_of_shares: float = 0.0
 
 
 @dataclass
 class AssetValue:
+    """
+    A dataclass representing an asset's value used to plot the
+    value over time
+    """
+
     open: float = 0.0
     close: float = 0.0
     high: float = 0.0
@@ -48,8 +53,9 @@ class plebdex:
     along with a calculated daily asset value using the portfolio's holdings
     """
 
-    holdings: List[Holding]
-    daily_asset_values: Dict[datetime.date, AssetValue]
+    annual_return: float = 0.0
+    holdings: List[Holding] = []
+    daily_asset_values: Dict[datetime.date, AssetValue] = {}
 
 
 def initialize_logger():
@@ -79,9 +85,7 @@ def read_plebdex_and_generate_holdings(file_path=PLEBDEX_EXCEL_FILE):
         # Assume df has columns: "Ticker" (str), "Weight" (float)
         for row in df.itertuples(index=False):
             # Access attributes exactly matching column names: row.Ticker, row.Weight
-            holding = Holding(
-                ticker=row.Ticker, initial_weight=row.Weight, number_of_shares=0
-            )
+            holding = Holding(ticker=row.Ticker, initial_weight=row.Weight)
             holdings.append(holding)
 
         holdings_by_year[year_val] = holdings
@@ -97,32 +101,36 @@ def normalize(df):
     return df / df.iloc[0]
 
 
-def fetch_stock_data(ticker, year):
+def fetch_stock_data(year, ticker):
     """
     Fetches historical data for a given ticker from Yahoo Finance.
     Returns a DataFrame with the 'Close' price for a given holding.
     """
+
     # Given the trading year, calculate our start date of Jan 1
     start_date = datetime.date(year, 1, 1)
 
     # Set the upper bound to
     end_date = datetime.date(year + 1, 1, 1)
-    stock_data = yf.download("SPY", start=start_date, end=end_date)
+    stock_data = yf.download(ticker, start=start_date, end=end_date)
+    logger.debug(stock_data)
 
-    if not ("Close" in stock_data.columns):
-        logger.debug("Close is not in the data pulled from yFinance")
-        return
-
-    stock_data = stock_data[["Close"]].rename(columns={"Close": ticker})
-    logger.info(stock_data)
+    return stock_data
 
 
-def main():
-    # initialize our logger
-    initialize_logger()
+def rebalance():
+    log.info("TODO")
 
-    # read the plebdex holdings from excel, returning a data structure
-    # containing all holdings by year
+
+def calculate_annual_return(plebdex):
+    """
+    Calculates the annual return for the plebdex.
+
+    This calculation is done by taking the initial dollar investment,
+    and calculating the number of owned shares of an asset.
+    At the end of each year, the portfolio is rebalanced into the
+    subsequent years holdings
+    """
 
     # calculate the number of shares for each holding
 
@@ -132,15 +140,57 @@ def main():
 
     # calculate the daily close of the plebdex to build data points
 
+    investment_value = INITIAL_INVESTMENT_DOLLARS
+
+    for year, holdings in plebdex.items():
+        year_str = str(year)
+
+        logger.info(year_str + " " + str(holdings))
+        # for each holding fetch the stock data for that year
+        for holding in holdings:
+            stock_data = fetch_stock_data(year, holding.ticker)
+            logger.debug(stock_data)
+
+            if stock_data.empty:
+                logger.info("No stock data for" + holding.ticker)
+                continue
+
+            # get the Jan 1 price opening price to calculate our initial share count
+            jan_1_price_dollars = stock_data.iloc[0]["Open"].values[0]
+            logger.info(
+                "January " + year_str + " Opening Price " + str(jan_1_price_dollars)
+            )
+
+            # calculate the initial number of holdings for the year
+            holding.number_of_shares = (
+                investment_value * holding.initial_weight
+            ) / jan_1_price_dollars
+            logger.info("Holding " + str(holding))
+
+            # get the last closing price
+            end_of_year = stock_data.iloc[len(stock_data) - 1]
+            logger.info(end_of_year)
+
+
+def main():
+    # initialize our logger
+    initialize_logger()
+
+    # read the plebdex holdings from excel, returning a data structure
+    # containing all holdings by year
+    plebdex = read_plebdex_and_generate_holdings()
+
+    # calculate the rolling sum of returns
+    calculate_annual_return(plebdex)
+
     # normalize the plebdex
 
     # plot the data points
 
-    fetch_stock_data("SPY", 2023)
+    # fetch_stock_data("SPY", 2023)
 
     # fetch our holdings from the plebdex
-    holdings = read_plebdex_and_generate_holdings()
-    logger.info(holdings)
+    logger.info(plebdex)
 
     # loadPlebdex()
     # Input parameters
