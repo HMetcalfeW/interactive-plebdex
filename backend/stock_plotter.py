@@ -30,7 +30,7 @@ class Holding:
 
     ticker: str = ""
     initial_weight: float = 0.0
-    number_of_shares: float = 0.0
+    num_of_shares: float = 0.0
 
 
 @dataclass
@@ -149,7 +149,8 @@ def calculate_annual_return(plebdex):
     for year, holdings in plebdex.items():
         year_str = str(year)
 
-        logger.debug(year_str + " " + str(holdings))
+        logger.info("Started " + year_str + " with $" + str(investment_value))
+
         # for each holding fetch the stock data for that year
         for holding in holdings:
             stock_data = fetch_stock_data(year, holding.ticker)
@@ -166,14 +167,26 @@ def calculate_annual_return(plebdex):
             )
 
             # calculate the initial number of holdings for the year
-            holding.number_of_shares = (
+            holding.num_of_shares = (
                 investment_value * holding.initial_weight
             ) / jan_1_price_dollars
             logger.debug("Holding " + str(holding))
 
+            # todo: figure out the appropriate calculations for dividends
+
             # get the last closing price
-            end_of_year = stock_data.iloc[len(stock_data) - 1]
-            logger.debug(end_of_year)
+            end_of_year_price_dollars = stock_data.iloc[len(stock_data) - 1][
+                "Close"
+            ].values[0]
+            logger.debug(end_of_year_price_dollars)
+
+            # calculate the total asset return based on the number of shares held
+            investment_value = investment_value + (
+                (end_of_year_price_dollars - jan_1_price_dollars)
+                * holding.num_of_shares
+            )
+
+        logger.info("Ended " + year_str + " with $" + str(investment_value))
 
 
 def main():
