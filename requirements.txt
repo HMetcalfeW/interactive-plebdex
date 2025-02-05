@@ -5,6 +5,7 @@ pandas
 yfinance
 matplotlib
 openpyxl
+plotly
 
 # Code Format & Lint
 black
