@@ -1,8 +1,3 @@
-from typing import List
-from typing import Dict
-
-
-from dataclasses import dataclass, field
 import datetime
 import time
 
@@ -18,44 +13,8 @@ logger = log.getLogger(__name__)
 DEFAULT_LOG_LEVEL = log.INFO
 DEFAULT_LOG_FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 
-INITIAL_INVESTMENT_DOLLARS = 10000
+INITIAL_INVESTMENT_DOLLARS = 10_000
 PLEBDEX_EXCEL_FILE = "./data/plebdex-weights.xlsx"
-
-
-@dataclass
-class Holding:
-    """
-    This represents an investable security holding
-    """
-
-    ticker: str = ""
-    initial_weight: float = 0.0
-    num_of_shares: float = 0.0
-
-
-@dataclass
-class AssetValue:
-    """
-    A dataclass representing an asset's value used to plot the
-    value over time
-    """
-
-    open: float = 0.0
-    close: float = 0.0
-    high: float = 0.0
-    low: float = 0.0
-
-
-@dataclass
-class plebdex:
-    """
-    This a portfolio and its holdings for a given year
-    along with a calculated daily asset value using the portfolio's holdings
-    """
-
-    annual_return: float = 0.0
-    holdings: List[Holding] = field(default_factory=list)
-    daily_asset_values: Dict[datetime.date, AssetValue] = field(default_factory=dict)
 
 
 def initialize_logger():
@@ -63,6 +22,18 @@ def initialize_logger():
     This function initializes our application logger's format and log level
     """
     log.basicConfig(format=DEFAULT_LOG_FORMAT, level=DEFAULT_LOG_LEVEL)
+
+
+def make_benchmark_plebdex(ticker, first_year, last_year):
+    """
+    Creates a DataFrame with one row per year from first_year to last_year,
+    setting Ticker = <ticker> and Weight = 1.0 (100% in that ticker).
+    """
+    rows = []
+    for y in range(first_year, last_year + 1):
+        rows.append({"Year": y, "Ticker": ticker, "Weight": 1.0})
+    df_bench = pd.DataFrame(rows, columns=["Year", "Ticker", "Weight"])
+    return df_bench
 
 
 def read_plebdex_as_dataframe(file_path=PLEBDEX_EXCEL_FILE):
@@ -120,23 +91,23 @@ def fetch_yearly_stock_prices(year, tickers_list):
         start=start_date,
         end=end_date,
         group_by="ticker",
-        multi_level_index=False,
+        # multi_level_index=False,
         threads=False,  # default is true and connection pool limit to yFinance is 10
+        actions=True,  # fetches dividend information
     )
 
     # If the result is empty, just return it
     if daily_stock_data.empty:
         return daily_stock_data
 
+    if isinstance(daily_stock_data.columns, pd.MultiIndex):
+        daily_stock_data.columns = [
+            f"{lvl0}_{lvl1}" for (lvl0, lvl1) in daily_stock_data.columns
+        ]
+
     # some of the daily stock data includes empty NaN data
     # let's clean it by filling with the previous day's price
     daily_stock_data.ffill(inplace=True)
-
-    # Flatten columns:
-    # Original MultiIndex is like ('SPY','Open'), after flatten => "Open_SPY"
-    daily_stock_data.columns = [
-        f"{lvl0}_{lvl1}" for lvl0, lvl1 in daily_stock_data.columns
-    ]
 
     # Truncate to just Jan 1–Dec 31 of THIS `year`
     year_start = pd.Timestamp(year, 1, 1)
@@ -194,13 +165,51 @@ def find_first_valid_day(df_daily, tickers_list):
     return first_row, first_date
 
 
-def compute_portfolio_values(df_plebdex, yearly_data, initial_investment=10_000):
+def shift_dividends_by_offset(df_daily, tickers_list, offset=30):
+    """
+    For each ticker, we shift the ex-dividend data (Ticker_Dividends)
+    30 days forward to approximate the actual pay date.
+    Returns a new DataFrame that includes Ticker_PaidDividends columns.
+    """
+    df_result = df_daily.copy()
+
+    for ticker in tickers_list:
+        ex_col = f"{ticker}_Dividends"
+        pay_col = f"{ticker}_PaidDividends"
+
+        if ex_col not in df_result.columns:
+            # no dividends column for this ticker
+            continue
+
+        # Original ex-date series
+        ex_series = df_result[ex_col]
+
+        # Create a shifted copy by 30 days
+        shifted = ex_series.copy()
+        shifted.index = shifted.index + pd.DateOffset(days=offset)
+
+        # Reindex onto df_result's index, fill missing with 0.0
+        shifted = shifted.reindex(df_result.index, fill_value=0.0)
+
+        # Put this in a new column "Ticker_PaidDividends"
+        df_result[pay_col] = shifted
+
+    return df_result
+
+
+def compute_portfolio_values(
+    df_plebdex, yearly_data, initial_investment=INITIAL_INVESTMENT_DOLLARS
+):
     """
     For each year in 'yearly_data':
       - find the first valid trading day to allocate shares
       - create Value_{ticker} columns = # shares * TICKER_Close
       - sum to PortfolioValue column
       - the last day's PortfolioValue => next year's initial investment
+    Incorporates daily dividend reinvestment:
+      - Each day, if "Ticker_Dividends" > 0, we buy additional shares of Ticker
+        at that day's Close price.
+      - The final day value => next year's initial investment.
     Returns:
       portfolio_history: {year: df_daily (with Value_ cols, PortfolioValue col)}
       final_investment_value: float
@@ -214,13 +223,18 @@ def compute_portfolio_values(df_plebdex, yearly_data, initial_investment=10_000)
 
         # subset of plebdex for this year (tickers + weights)
         df_year = df_plebdex[df_plebdex["Year"] == year]
+
         if df_daily.empty or df_year.empty:
             logger.debug(f"Year={year} has no data or no tickers, skipping.")
             portfolio_history[year] = df_daily
             continue
 
-        # ========== Step A: Find first valid day for opening prices ==========
         tickers_list = df_year["Ticker"].unique().tolist()
+
+        # Shift ex-div data by 30 days to approximate pay date
+        df_daily = shift_dividends_by_offset(df_daily, tickers_list)
+
+        # ========== Step A: Find first valid day for opening prices ==========
         first_row, first_date = find_first_valid_day(df_daily, tickers_list)
         if first_row is None:
             logger.debug(f"No valid first trading day for Year={year}, skipping.")
@@ -272,9 +286,9 @@ def compute_portfolio_values(df_plebdex, yearly_data, initial_investment=10_000)
             last_day_date = df_valid_close.index[-1]
             final_value = df_valid_close.loc[last_day_date, "PortfolioValue"]
 
-        logger.debug(
-            f"Year={year} => first valid day={first_date}, final day={last_day_date}, final portfolio=${final_value:,.2f}"  # noqa: E501, E231
-        )
+        logger.debug(f"=== End of Year {year} Holdings ===")
+        for t, shares in num_shares.items():
+            logger.debug(f"    {t}: {shares:.2f} shares")  # noqa: E231
         investment_value = final_value
 
         # store the augmented DataFrame
@@ -283,134 +297,83 @@ def compute_portfolio_values(df_plebdex, yearly_data, initial_investment=10_000)
     return portfolio_history, investment_value
 
 
-def plot_plebdex_vs_benchmarks(
-    portfolio_history,
-    bench_tickers=["SPY", "QQQ"],
-    label_plebdex="Plebdex",
-    plot_title="Plebdex vs Benchmarks (Normalized)",
-):
+def run_plebdex_portfolio(df_plebdex, initial_investment=INITIAL_INVESTMENT_DOLLARS):
     """
-    Merges the daily portfolio DataFrames from 'portfolio_history' into one,
-    finds a valid 'start' day for normalization, fetches & normalizes benchmarks,
-    then plots them all together.
-
-    :param portfolio_history: dict { year: df_daily_with_PortfolioValue }
-    :param bench_tickers: list of benchmark ticker symbols for comparison
-    :param label_plebdex: the label to give your plebdex line in the legend
-    :param plot_title: chart title
+    High-level function that:
+      1) Captures all yearly data from Yahoo (bulk fetching each year's tickers)
+      2) Computes the daily portfolio, returning the final value.
+    Returns:
+      portfolio_history: {year: DataFrame with daily PortfolioValue, etc.}
+      final_value: float final portfolio after the last year
     """
-    # -----------------------------
-    # STEP A: Combine all years' portfolio data into one DataFrame
-    # -----------------------------
-    df_pleb_all = pd.concat(
-        [
-            portfolio_history[y][["PortfolioValue"]]
-            for y in sorted(portfolio_history.keys())
-        ],
-        axis=0,
-    )
-    df_pleb_all.sort_index(inplace=True)
+    # Step A: Capture the yearly data
+    yearly_data = capture_all_yearly_data(df_plebdex)
 
-    # Drop rows where PortfolioValue is NaN or zero
-    df_pleb_all = df_pleb_all.dropna(subset=["PortfolioValue"])
-    df_pleb_all = df_pleb_all[df_pleb_all["PortfolioValue"] > 0]
-
-    if df_pleb_all.empty:
-        logger.debug("No valid portfolio data to plot.")
-        return
-
-    # 1) Identify the first valid row to normalize
-    first_valid_date = df_pleb_all.index[0]
-    first_val = df_pleb_all.loc[first_valid_date, "PortfolioValue"]
-
-    # 2) Create a normalized column
-    df_pleb_all[label_plebdex] = df_pleb_all["PortfolioValue"] / first_val
-
-    # -----------------------------
-    # STEP B: Fetch benchmark data (covering the date range of the plebdex)
-    # -----------------------------
-    # We'll fetch from the earliest to a bit past the latest date in df_pleb_all
-    start_date = df_pleb_all.index.min().date()
-    end_date = df_pleb_all.index.max().date() + datetime.timedelta(days=1)
-
-    logger.debug(f"Fetching benchmarks {bench_tickers} from {start_date} to {end_date}")
-    df_bench = yf.download(
-        bench_tickers, start=start_date, end=end_date, group_by="ticker", threads=False
+    # Step B: Compute the portfolio
+    portfolio_history, final_val = compute_portfolio_values(
+        df_plebdex, yearly_data, initial_investment=initial_investment
     )
 
-    if not df_bench.empty:
-        # Flatten columns
-        df_bench.columns = [f"{c[0]}_{c[1]}" for c in df_bench.columns]
-        # Forward fill missing
-        df_bench.ffill(inplace=True)
+    return portfolio_history, final_val
 
-        # -----------------------------
-        # STEP C: Create normalized columns for each benchmark
-        # -----------------------------
-        for ticker in bench_tickers:
-            close_col = f"{ticker}_Close"
-            if close_col not in df_bench.columns:
-                logger.debug(
-                    f"Warning: {close_col} not in df_bench; skipping {ticker}"  # noqa: E501, E702
-                )
-                continue
 
-            # Drop rows where the close is zero or NaN
-            df_bench = df_bench.dropna(subset=[close_col])
-            df_bench = df_bench[df_bench[close_col] > 0]
-
-            if df_bench.empty:
-                continue
-
-            # Normalized to the *first valid* close
-            first_bench_val = df_bench[close_col].iloc[0]
-            norm_col = f"{ticker}_Norm"
-            df_bench[norm_col] = df_bench[close_col] / first_bench_val
-    else:
-        logger.debug(
-            "Benchmark data is empty or failed to fetch. Plotting only Plebdex."
-        )
-
-    # -----------------------------
-    # STEP D: Merge for plotting
-    # -----------------------------
-    # Keep only the columns we care about
-    if not df_bench.empty:
-        norm_cols = [
-            f"{t}_Norm" for t in bench_tickers if f"{t}_Norm" in df_bench.columns
-        ]
-        df_plot = pd.merge(
-            df_pleb_all[[label_plebdex]],
-            df_bench[norm_cols],
-            how="outer",
-            left_index=True,
-            right_index=True,
-        )
-    else:
-        df_plot = df_pleb_all[[label_plebdex]]
-
-    df_plot.sort_index(inplace=True)
-
-    if df_plot.empty:
-        logger.debug("Merged DataFrame is empty, nothing to plot.")
+def plot_portfolios(portfolio_histories, plot_title="Comparison"):
+    """
+    Takes a dictionary of label -> portfolio_history,
+    where each portfolio_history is {year: df_daily} with a 'PortfolioValue' column.
+    Merges them all, normalizes each to start at 1.0, and plots in one chart.
+    """
+    if not portfolio_histories:
+        log.warning("No portfolios to plot.")
         return
 
-    logger.debug("=== First rows of df_pleb_all ===")
-    logger.debug(df_pleb_all.head(20))
+    # We'll create an empty DataFrame that we'll merge each label's data into
+    master_df = pd.DataFrame()
 
-    # -----------------------------
-    # STEP E: Plot
-    # -----------------------------
+    # For each label (e.g. "Plebdex", "SPY", "QQQ"), combine its years into one DF
+    # then normalize the first valid day to 1.0, and merge into master_df
+    for label, hist_dict in portfolio_histories.items():
+        # 1) Combine all years
+        df_port = pd.concat(
+            [hist_dict[y][["PortfolioValue"]] for y in sorted(hist_dict.keys())], axis=0
+        ).sort_index()
+
+        # 2) Drop invalid
+        df_port.dropna(subset=["PortfolioValue"], inplace=True)
+        df_port = df_port[df_port["PortfolioValue"] > 0]
+
+        if df_port.empty:
+            log.warning(f"No valid data for {label}, skipping.")
+            continue
+
+        # 3) Normalize
+        first_val = df_port["PortfolioValue"].iloc[0]
+        df_port[label] = df_port["PortfolioValue"] / first_val
+
+        # 4) We'll merge df_port[label] into master_df
+        df_port_to_merge = df_port[[label]]  # just the normalized column
+
+        # Outer merge on index
+        if master_df.empty:
+            master_df = df_port_to_merge
+        else:
+            master_df = pd.merge(
+                master_df,
+                df_port_to_merge,
+                how="outer",
+                left_index=True,
+                right_index=True,
+            )
+
+    if master_df.empty:
+        log.warning("No merged data to plot after processing all portfolios.")
+        return
+
+    # 5) Plot each label's line
     plt.figure(figsize=(10, 6))
-    # Plot the plebdex line
-    df_plot[label_plebdex].plot(label=label_plebdex)
-
-    # Plot each benchmark line
-    if not df_bench.empty:
-        for ticker in bench_tickers:
-            norm_col = f"{ticker}_Norm"
-            if norm_col in df_plot.columns:
-                df_plot[norm_col].plot(label=ticker)
+    for label in portfolio_histories.keys():
+        if label in master_df.columns:
+            master_df[label].plot(label=label)
 
     plt.title(plot_title)
     plt.xlabel("Date")
@@ -424,33 +387,39 @@ def main():
     # initialize our logger
     initialize_logger()
 
-    # read the plebdex holdings from excel, returning a data structure
-    # containing all holdings by year
-    # plebdex = read_plebdex_and_generate_holdings()
-
-    plebdex = read_plebdex_as_dataframe()
-    logger.info(plebdex)
-
-    # 2. Fetch daily data for each year
-    yearly_data = capture_all_yearly_data(plebdex)
-    logger.info(yearly_data)
-    # yearly_data[2023] -> daily DataFrame for tickers in 2023,
-    # columns like "Open_SPY", "Close_SPY", ...
-
-    # 3. Compute daily portfolio & get final value
-    portfolio_history, final_value = compute_portfolio_values(plebdex, yearly_data)
-
-    # 4. combine all years' portfolio data and plot it
-    plot_plebdex_vs_benchmarks(
-        portfolio_history,
-        bench_tickers=["SPY", "QQQ"],  # or any list of tickers
-        label_plebdex="Plebdex",
-        plot_title="Plebdex vs SPY vs QQQ (Normalized)",
+    # 1) Read plebdex
+    df_plebdex = read_plebdex_as_dataframe(PLEBDEX_EXCEL_FILE)
+    # 2) Run pipeline for main plebdex
+    portfolio_history_pleb, final_val_pleb = run_plebdex_portfolio(
+        df_plebdex, INITIAL_INVESTMENT_DOLLARS
     )
 
-    logger.info(
-        f"Final portfolio value after last year: ${final_value:,.2f}"  # noqa: E231
+    # 3) Single-ticker "fake" plebdex for SPY
+    df_spy_plebdex = make_benchmark_plebdex("SPY", 2023, 2025)  # define the date range
+    portfolio_history_spy, final_val_spy = run_plebdex_portfolio(
+        df_spy_plebdex, INITIAL_INVESTMENT_DOLLARS
     )
+
+    # 4) Another benchmark: QQQ
+    df_qqq_plebdex = make_benchmark_plebdex("QQQ", 2023, 2025)
+    portfolio_history_qqq, final_val_qqq = run_plebdex_portfolio(
+        df_qqq_plebdex, INITIAL_INVESTMENT_DOLLARS
+    )
+
+    # 5) Prepare the dict for plotting
+    portfolios_to_plot = {
+        "Plebdex": portfolio_history_pleb,
+        "SPY": portfolio_history_spy,
+        "QQQ": portfolio_history_qqq,
+    }
+
+    # 6) Print final returns if needed
+    logger.info(f"Plebdex ended with ${final_val_pleb:.2f}")  # noqa: E231
+    logger.info(f"SPY ended with ${final_val_spy:.2f}")  # noqa: E231
+    logger.info(f"QQQ ended with ${final_val_qqq:.2f}")  # noqa: E231
+
+    # 7) Plot them, no direct yfinance calls inside the plot function
+    plot_portfolios(portfolios_to_plot, "Plebdex vs. Benchmarks (Normalized)")
 
 
 if __name__ == "__main__":
